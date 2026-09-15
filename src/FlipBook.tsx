@@ -26,7 +26,7 @@ const Page = forwardRef<HTMLDivElement, { src: string; index: number }>(
   },
 );
 
-type Size = { pageW: number; pageH: number };
+type Size = { pageW: number; pageH: number; stageW: number; stageH: number };
 
 function labelForPage(pageIndex: number): string {
   const n = PAGE_FILES.length;
@@ -38,52 +38,116 @@ function labelForPage(pageIndex: number): string {
   return `Pages ${left + 1}–${Math.min(right + 1, n)}`;
 }
 
+type FlipApi = {
+  pageFlip: () => {
+    update: () => void;
+    getBoundsRect: () => {
+      left: number;
+      top: number;
+      width: number;
+      height: number;
+      pageWidth: number;
+    };
+  };
+};
+
 export function FlipBook() {
+  const stageRef = useRef<HTMLDivElement>(null);
   const hostRef = useRef<HTMLDivElement>(null);
-  const [size, setSize] = useState<Size>({ pageW: 160, pageH: 240 });
+  const bookRef = useRef<FlipApi>(null);
+  const [size, setSize] = useState<Size>({
+    pageW: 160,
+    pageH: 240,
+    stageW: 320,
+    stageH: 240,
+  });
   const [pageIndex, setPageIndex] = useState(0);
   const [ready, setReady] = useState(false);
 
-  useLayoutEffect(() => {
+  const fitToStage = useCallback(() => {
     const host = hostRef.current;
-    if (!host) return;
+    const root = host?.querySelector('.hazel-flipbook') as HTMLElement | null;
+    const api = bookRef.current?.pageFlip?.();
+    if (!host || !root || !api) return;
+    try {
+      api.update();
+      const r = api.getBoundsRect();
+      if (!r?.width || !r?.height) return;
+      const hw = host.clientWidth;
+      const hh = host.clientHeight;
+      // Stretch the drawn book so its spread exactly fills the host (kills letterboxing).
+      const sx = hw / r.width;
+      const sy = hh / r.height;
+      root.style.transformOrigin = '0 0';
+      root.style.transform = `translate(${-r.left * sx}px, ${-r.top * sy}px) scale(${sx}, ${sy})`;
+    } catch {
+      // ignore until page-flip is ready
+    }
+  }, []);
+
+  useLayoutEffect(() => {
+    const stage = stageRef.current;
+    if (!stage) return;
 
     const measure = () => {
-      // Use ONLY the host box — same element page-flip reads as its block parent.
-      // Mixing visualViewport with 100dvh caused top/bottom letterboxing.
-      const rect = host.getBoundingClientRect();
-      const w = Math.max(1, Math.floor(rect.width));
-      const h = Math.max(1, Math.floor(rect.height));
-      // Odd total width: give the extra pixel to the right by flooring half.
-      const pageW = Math.max(120, Math.floor(w / 2));
-      const pageH = Math.max(160, h);
+      // Bind the stage to the *visible* viewport (not 100dvh under the URL bar).
+      const vv = window.visualViewport;
+      const stageW = Math.max(1, Math.round(vv?.width ?? window.innerWidth));
+      const stageH = Math.max(1, Math.round(vv?.height ?? window.innerHeight));
+      const left = Math.round(vv?.offsetLeft ?? 0);
+      const top = Math.round(vv?.offsetTop ?? 0);
+
+      stage.style.position = 'fixed';
+      stage.style.left = `${left}px`;
+      stage.style.top = `${top}px`;
+      stage.style.width = `${stageW}px`;
+      stage.style.height = `${stageH}px`;
+      stage.style.right = 'auto';
+      stage.style.bottom = 'auto';
+
+      const pageW = Math.max(120, Math.floor(stageW / 2));
+      const pageH = Math.max(160, stageH);
       setSize((prev) =>
-        prev.pageW === pageW && prev.pageH === pageH
+        prev.pageW === pageW &&
+        prev.pageH === pageH &&
+        prev.stageW === stageW &&
+        prev.stageH === stageH
           ? prev
-          : { pageW, pageH },
+          : { pageW, pageH, stageW, stageH },
       );
       setReady(true);
+      requestAnimationFrame(() => requestAnimationFrame(fitToStage));
     };
 
     measure();
-    const ro = new ResizeObserver(() => {
-      // rAF so layout (address bar show/hide) settles before we read
-      requestAnimationFrame(measure);
-    });
-    ro.observe(host);
+    const ro = new ResizeObserver(() => requestAnimationFrame(measure));
+    ro.observe(document.documentElement);
     window.addEventListener('resize', measure);
     window.addEventListener('orientationchange', measure);
+    const viewport = window.visualViewport;
+    viewport?.addEventListener('resize', measure);
+    viewport?.addEventListener('scroll', measure);
     return () => {
       ro.disconnect();
       window.removeEventListener('resize', measure);
       window.removeEventListener('orientationchange', measure);
+      viewport?.removeEventListener('resize', measure);
+      viewport?.removeEventListener('scroll', measure);
     };
-  }, []);
+  }, [fitToStage]);
 
-  const onFlip = useCallback((e: { data: number }) => {
-    setPageIndex(e.data);
-    playPageTurnSfx();
-  }, []);
+  const onFlip = useCallback(
+    (e: { data: number }) => {
+      setPageIndex(e.data);
+      playPageTurnSfx();
+      requestAnimationFrame(fitToStage);
+    },
+    [fitToStage],
+  );
+
+  const onInit = useCallback(() => {
+    requestAnimationFrame(() => requestAnimationFrame(fitToStage));
+  }, [fitToStage]);
 
   const spreadLabel = useMemo(() => labelForPage(pageIndex), [pageIndex]);
   const showChrome = pageIndex === 0;
@@ -93,12 +157,14 @@ export function FlipBook() {
   return (
     <div
       className="flip-stage"
+      ref={stageRef}
       onPointerDown={unlockAudio}
       onTouchStart={unlockAudio}
     >
       <div className="flip-stage__book" ref={hostRef}>
         {ready && (
           <HTMLFlipBook
+            ref={bookRef as never}
             key={`${size.pageW}x${size.pageH}`}
             width={size.pageW}
             height={size.pageH}
@@ -111,17 +177,15 @@ export function FlipBook() {
             showCover={true}
             usePortrait={false}
             drawShadow={true}
-            maxShadowOpacity={0.35}
+            maxShadowOpacity={0.3}
             flippingTime={900}
             useMouseEvents={true}
             mobileScrollSupport={false}
             swipeDistance={20}
             className="hazel-flipbook"
-            style={{
-              width: `${bookW}px`,
-              height: `${bookH}px`,
-            }}
+            style={{ width: `${bookW}px`, height: `${bookH}px` }}
             onFlip={onFlip}
+            onInit={onInit}
           >
             {PAGE_FILES.map((src, i) => (
               <Page key={src} src={src} index={i} />
