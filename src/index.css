@@ -179,11 +179,12 @@ body,
   user-select: none;
 }
 
-/* Cover: fill screen without squash-stretch */
+/* Cover: show full art (title near top) — no crop, no stretch */
 .book-page--cover img {
-  object-fit: cover;
-  object-position: center;
+  object-fit: contain;
+  object-position: center center;
   transform: none;
+  background: #050b14;
 }
 
 .build-stamp {
