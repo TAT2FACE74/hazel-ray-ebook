@@ -1,7 +1,7 @@
 /** PDF page PNGs in reading order (1-indexed filenames). */
 export const PAGE_FILES: string[] = Array.from({ length: 28 }, (_, i) => {
   const n = String(i + 1).padStart(2, '0');
-  return `/pages/page-${n}.png`;
+  return `${import.meta.env.BASE_URL}pages/page-${n}.png`;
 });
 
 /** Portrait page aspect from PDF (576×856 pts). */

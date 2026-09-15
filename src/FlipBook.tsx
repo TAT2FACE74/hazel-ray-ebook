@@ -22,8 +22,9 @@ const Page = forwardRef<HTMLDivElement, { src: string; index: number }>(
 function computePageSize() {
   const vw = window.innerWidth;
   const vh = window.innerHeight;
-  const padX = 16;
-  const padY = 48; // leave room for chrome
+  // Minimal padding so the two-page spread fills nearly the full viewport
+  const padX = 6;
+  const padY = 10;
   const maxH = Math.max(120, vh - padY);
   const maxW = Math.max(80, (vw - padX) / 2);
   let height = maxH;

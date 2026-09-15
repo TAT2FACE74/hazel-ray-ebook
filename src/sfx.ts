@@ -4,12 +4,12 @@ let unlocked = false;
 
 function ensure() {
   if (!sparkle) {
-    sparkle = new Audio('/sparkle.mp3');
+    sparkle = new Audio(`${import.meta.env.BASE_URL}sparkle.mp3`);
     sparkle.preload = 'auto';
     sparkle.volume = 0.55;
   }
   if (!whoosh) {
-    whoosh = new Audio('/page-whoosh.mp3');
+    whoosh = new Audio(`${import.meta.env.BASE_URL}page-whoosh.mp3`);
     whoosh.preload = 'auto';
     whoosh.volume = 0.35;
   }

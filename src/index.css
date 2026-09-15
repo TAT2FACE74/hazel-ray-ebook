@@ -118,6 +118,7 @@ body,
 
 /* —— Landscape flip book —— */
 .flip-stage {
+  position: relative;
   width: 100%;
   height: 100%;
   display: flex;
@@ -137,7 +138,7 @@ body,
   justify-content: center;
   width: 100%;
   min-height: 0;
-  padding: 8px;
+  padding: 4px;
 }
 
 .hazel-flipbook {
@@ -155,23 +156,30 @@ body,
   display: block;
   width: 100%;
   height: 100%;
-  object-fit: cover;
+  object-fit: contain;
   pointer-events: none;
   -webkit-user-drag: none;
 }
 
 .flip-stage__chrome {
-  flex: 0 0 auto;
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 5;
   display: flex;
   flex-wrap: wrap;
-  gap: 0.35rem 1rem;
+  gap: 0.2rem 0.75rem;
   align-items: baseline;
   justify-content: center;
   width: 100%;
-  padding: 0.35rem 0.75rem 0.55rem;
+  padding: 0.2rem 0.5rem max(0.25rem, env(safe-area-inset-bottom, 0));
   color: var(--gold-soft);
-  font-size: 0.75rem;
-  opacity: 0.9;
+  font-size: 0.65rem;
+  opacity: 0.85;
+  pointer-events: none;
+  text-shadow: 0 1px 4px rgba(0, 0, 0, 0.85);
+  background: linear-gradient(to top, rgba(5, 11, 20, 0.55), transparent);
 }
 
 .flip-stage__title {
