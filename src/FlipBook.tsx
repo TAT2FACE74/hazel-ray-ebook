@@ -54,13 +54,6 @@ async function requestFs(el: HTMLElement | null) {
   }
 }
 
-function labelForPage(pageIndex: number): string {
-  const n = PAGE_FILES.length;
-  if (pageIndex <= 0) return 'Cover';
-  if (pageIndex >= n - 1) return 'The End';
-  const left = pageIndex % 2 === 1 ? pageIndex : pageIndex - 1;
-  return `Pages ${left + 1}–${Math.min(left + 2, n)}`;
-}
 
 export function FlipBook() {
   const stageRef = useRef<HTMLDivElement>(null);
@@ -203,8 +196,8 @@ export function FlipBook() {
   };
 
   const showCover = pageIndex === 0;
-  const showChrome = pageIndex === 0;
   const showFsHint = !isFs && !hintGone;
+  const showTurnHint = pageIndex === 0 && !hintGone;
   const bookW = size.pageW * 2;
   const bookH = size.pageH;
 
@@ -275,11 +268,27 @@ export function FlipBook() {
 
       {showFsHint && <div className="fs-hint">Tap for full screen</div>}
 
-      {showChrome && (
-        <div className="flip-stage__chrome">
-          <span className="flip-stage__title">Hazel Ray Lights the Way</span>
-          <span className="flip-stage__spread">{labelForPage(pageIndex)}</span>
-          <span className="flip-stage__hint">Swipe to turn</span>
+      {showTurnHint && (
+        <div className="turn-arrow" aria-hidden>
+          <svg className="turn-arrow__shape" viewBox="0 0 64 64" width="56" height="56">
+            <defs>
+              <clipPath id="turn-arrow-clip">
+                <path d="M42 12 L18 32 L42 52 L42 40 L54 40 L54 24 L42 24 Z" />
+              </clipPath>
+            </defs>
+            {/* outline */}
+            <path
+              d="M42 12 L18 32 L42 52 L42 40 L54 40 L54 24 L42 24 Z"
+              fill="none"
+              stroke="rgba(255,60,60,0.55)"
+              strokeWidth="2.5"
+              strokeLinejoin="round"
+            />
+            {/* fill that sweeps left→right */}
+            <g clipPath="url(#turn-arrow-clip)">
+              <rect className="turn-arrow__fill" x="0" y="0" width="64" height="64" />
+            </g>
+          </svg>
         </div>
       )}
     </div>
