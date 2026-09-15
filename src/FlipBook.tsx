@@ -1,72 +1,80 @@
-import { useCallback, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import {
+  forwardRef,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  
+  useRef,
+  useState,
+} from 'react';
+import HTMLFlipBook from 'react-pageflip';
 import { PAGE_FILES } from './pages';
 import { playPageTurnSfx, unlockAudio } from './sfx';
+
+const Page = forwardRef<
+  HTMLDivElement,
+  { src: string; index: number; kind: 'cover' | 'page' }
+>(function Page({ src, index, kind }, ref) {
+  const hard = index === 0 || index === PAGE_FILES.length - 1;
+  return (
+    <div
+      className={`book-page book-page--${kind}`}
+      ref={ref}
+      data-density={hard ? 'hard' : 'soft'}
+    >
+      <img
+        src={src}
+        alt={kind === 'cover' ? 'Cover' : `Page ${index + 1}`}
+        draggable={false}
+        loading={index < 4 ? 'eager' : 'lazy'}
+      />
+    </div>
+  );
+});
+
+type Size = { pageW: number; pageH: number };
+
+type FlipApi = {
+  pageFlip: () => {
+    update: () => void;
+    getBoundsRect: () => {
+      left: number;
+      top: number;
+      width: number;
+      height: number;
+      pageWidth: number;
+    } | null;
+  };
+};
+
+async function requestFs(el: HTMLElement | null) {
+  if (!el || document.fullscreenElement) return;
+  try {
+    await el.requestFullscreen();
+  } catch {
+    /* needs gesture on many browsers */
+  }
+}
 
 function labelForPage(pageIndex: number): string {
   const n = PAGE_FILES.length;
   if (pageIndex <= 0) return 'Cover';
   if (pageIndex >= n - 1) return 'The End';
   const left = pageIndex % 2 === 1 ? pageIndex : pageIndex - 1;
-  const right = left + 1;
-  return `Pages ${left + 1}–${Math.min(right + 1, n)}`;
-}
-
-function spreadLeft(pageIndex: number): number {
-  if (pageIndex <= 0) return 0;
-  return pageIndex % 2 === 1 ? pageIndex : pageIndex - 1;
-}
-
-function spreadPages(pageIndex: number): {
-  left: number | null;
-  right: number | null;
-  cover: boolean;
-} {
-  const n = PAGE_FILES.length;
-  if (pageIndex <= 0) return { left: null, right: null, cover: true };
-  const left = spreadLeft(pageIndex);
-  if (left >= n - 1) return { left: n - 1, right: null, cover: false };
-  return { left, right: left + 1 < n ? left + 1 : null, cover: false };
-}
-
-function nextIndex(pageIndex: number, n: number): number | null {
-  if (pageIndex >= n - 1) return null;
-  if (pageIndex <= 0) return 1;
-  const left = spreadLeft(pageIndex);
-  const nxt = left + 2;
-  return nxt >= n ? n - 1 : nxt;
-}
-
-function prevIndex(pageIndex: number): number | null {
-  if (pageIndex <= 0) return null;
-  if (pageIndex <= 1) return 0;
-  return spreadLeft(pageIndex) - 2;
-}
-
-type Drag = {
-  startX: number;
-  currentX: number;
-  width: number;
-  dir: 'next' | 'prev' | null;
-};
-
-async function tryFullscreen(el: HTMLElement) {
-  try {
-    if (!document.fullscreenElement && el.requestFullscreen) {
-      await el.requestFullscreen();
-    }
-  } catch {
-    /* user gesture / policy — ignore */
-  }
+  return `Pages ${left + 1}–${Math.min(left + 2, n)}`;
 }
 
 export function FlipBook() {
   const stageRef = useRef<HTMLDivElement>(null);
-  const dragRef = useRef<Drag | null>(null);
+  const hostRef = useRef<HTMLDivElement>(null);
+  const bookRef = useRef<FlipApi>(null);
+  const [size, setSize] = useState<Size>({ pageW: 200, pageH: 300 });
+  const [ready, setReady] = useState(false);
   const [pageIndex, setPageIndex] = useState(0);
-  const [drag, setDrag] = useState<Drag | null>(null);
-  const [animating, setAnimating] = useState(false);
+  const [isFs, setIsFs] = useState(false);
+  const [hintGone, setHintGone] = useState(false);
 
-  // Pin stage to the visible viewport in CSS pixels (kills mobile letterboxing).
+  // Pin stage to visible viewport pixels
   useLayoutEffect(() => {
     const stage = stageRef.current;
     if (!stage) return;
@@ -85,207 +93,150 @@ export function FlipBook() {
       stage.style.right = 'auto';
       stage.style.bottom = 'auto';
       stage.style.margin = '0';
-      stage.style.inset = 'auto';
+
+      const pageW = Math.max(120, Math.floor(w / 2));
+      const pageH = Math.max(160, h);
+      setSize((prev) =>
+        prev.pageW === pageW && prev.pageH === pageH ? prev : { pageW, pageH },
+      );
+      setReady(true);
     };
 
     sync();
+    // Try fullscreen as soon as landscape book mounts (may need later gesture)
+    void requestFs(stage);
+
     window.addEventListener('resize', sync);
-    window.addEventListener('orientationchange', sync);
+    window.addEventListener('orientationchange', () => {
+      window.setTimeout(sync, 50);
+      window.setTimeout(() => void requestFs(stage), 100);
+    });
     const vv = window.visualViewport;
     vv?.addEventListener('resize', sync);
     vv?.addEventListener('scroll', sync);
     return () => {
       window.removeEventListener('resize', sync);
-      window.removeEventListener('orientationchange', sync);
       vv?.removeEventListener('resize', sync);
       vv?.removeEventListener('scroll', sync);
     };
   }, []);
 
-  const n = PAGE_FILES.length;
-  const spread = useMemo(() => spreadPages(pageIndex), [pageIndex]);
-  const showChrome = pageIndex === 0;
-  const canNext = nextIndex(pageIndex, n) !== null;
-  const canPrev = prevIndex(pageIndex) !== null;
+  useEffect(() => {
+    const onFs = () => setIsFs(!!document.fullscreenElement);
+    document.addEventListener('fullscreenchange', onFs);
+    return () => document.removeEventListener('fullscreenchange', onFs);
+  }, []);
 
-  const goTo = useCallback((idx: number) => {
-    setPageIndex(idx);
+  // Force page-flip resting pages to fill the host every frame (kills letterboxing)
+  useEffect(() => {
+    let raf = 0;
+    const tick = () => {
+      const host = hostRef.current;
+      if (host) {
+        const hw = host.clientWidth;
+        const hh = host.clientHeight;
+        const pw = Math.floor(hw / 2);
+        host.querySelectorAll<HTMLElement>('.stf__item.--simple').forEach((el) => {
+          const right = el.classList.contains('--right');
+          el.style.setProperty('display', 'block', 'important');
+          el.style.setProperty('position', 'absolute', 'important');
+          el.style.setProperty('top', '0px', 'important');
+          el.style.setProperty('left', right ? `${pw}px` : '0px', 'important');
+          el.style.setProperty('width', `${pw}px`, 'important');
+          el.style.setProperty('height', `${hh}px`, 'important');
+        });
+        const parent = host.querySelector<HTMLElement>('.hazel-flipbook');
+        const wrap = host.querySelector<HTMLElement>('.stf__wrapper');
+        const block = host.querySelector<HTMLElement>('.stf__block');
+        for (const el of [parent, wrap, block]) {
+          if (!el) continue;
+          el.style.setProperty('width', `${hw}px`, 'important');
+          el.style.setProperty('height', `${hh}px`, 'important');
+          el.style.setProperty('max-width', 'none', 'important');
+          el.style.setProperty('max-height', 'none', 'important');
+          el.style.setProperty('padding', '0', 'important');
+          el.style.setProperty('padding-bottom', '0', 'important');
+        }
+      }
+      raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, [ready, size.pageW, size.pageH]);
+
+  const onFlip = useCallback((e: { data: number }) => {
+    setPageIndex(e.data);
+    setHintGone(true);
     playPageTurnSfx();
   }, []);
 
-  const onPointerDown = (e: React.PointerEvent) => {
+  const onUserGesture = () => {
     unlockAudio();
-    const stage = stageRef.current;
-    if (stage) void tryFullscreen(stage);
-    if (animating) return;
-    if (!stage) return;
-    stage.setPointerCapture(e.pointerId);
-    const next: Drag = {
-      startX: e.clientX,
-      currentX: e.clientX,
-      width: stage.clientWidth,
-      dir: null,
-    };
-    dragRef.current = next;
-    setDrag(next);
+    void requestFs(stageRef.current);
   };
 
-  const onPointerMove = (e: React.PointerEvent) => {
-    const prev = dragRef.current;
-    if (!prev) return;
-    const dx = e.clientX - prev.startX;
-    let dir = prev.dir;
-    if (!dir && Math.abs(dx) > 10) {
-      dir = dx < 0 ? 'next' : 'prev';
-      if (dir === 'next' && !canNext) dir = null;
-      if (dir === 'prev' && !canPrev) dir = null;
-    }
-    const next = { ...prev, currentX: e.clientX, dir };
-    dragRef.current = next;
-    setDrag(next);
-  };
-
-  const onPointerUp = (e: React.PointerEvent) => {
-    const stage = stageRef.current;
-    if (stage?.hasPointerCapture(e.pointerId)) {
-      stage.releasePointerCapture(e.pointerId);
-    }
-    const d = dragRef.current;
-    dragRef.current = null;
-    setDrag(null);
-    if (!d?.dir) return;
-
-    const dx = e.clientX - d.startX;
-    const threshold = Math.min(72, d.width * 0.12);
-    setAnimating(true);
-    window.setTimeout(() => setAnimating(false), 280);
-
-    if (d.dir === 'next' && dx < -threshold) {
-      const nxt = nextIndex(pageIndex, n);
-      if (nxt !== null) goTo(nxt);
-    } else if (d.dir === 'prev' && dx > threshold) {
-      const prv = prevIndex(pageIndex);
-      if (prv !== null) goTo(prv);
-    }
-  };
-
-  let progress = 0;
-  if (drag?.dir) {
-    const dx = drag.currentX - drag.startX;
-    if (drag.dir === 'next') progress = Math.min(1, Math.max(0, -dx / (drag.width * 0.4)));
-    else progress = Math.min(1, Math.max(0, dx / (drag.width * 0.4)));
-  }
-  const flipAngle = progress * 160;
-  const flipping = drag?.dir != null && progress > 0.02;
-
-  const under = useMemo(() => {
-    if (!drag?.dir) return null;
-    if (drag.dir === 'next') {
-      const nxt = nextIndex(pageIndex, n);
-      return nxt === null ? null : spreadPages(nxt);
-    }
-    const prv = prevIndex(pageIndex);
-    return prv === null ? null : spreadPages(prv);
-  }, [drag?.dir, n, pageIndex]);
-
-  const leaf = (index: number | null, side: 'left' | 'right' | 'cover') => {
-    if (index === null && side !== 'cover') {
-      return <div className={`leaf leaf--empty leaf--${side}`} key={side} />;
-    }
-    if (side === 'cover') {
-      return (
-        <div className="leaf leaf--cover" key="cover">
-          <img src={PAGE_FILES[0]} alt="Cover" draggable={false} loading="eager" />
-        </div>
-      );
-    }
-    return (
-      <div className={`leaf leaf--${side}`} key={`${side}-${index}`}>
-        <img
-          src={PAGE_FILES[index!]}
-          alt={`Page ${index! + 1}`}
-          draggable={false}
-          loading={index! < 4 ? 'eager' : 'lazy'}
-        />
-      </div>
-    );
-  };
-
-  const paintSpread = (s: ReturnType<typeof spreadPages>) => {
-    if (s.cover) return leaf(0, 'cover');
-    return (
-      <>
-        {leaf(s.left, 'left')}
-        {leaf(s.right, 'right')}
-      </>
-    );
-  };
+  const showChrome = pageIndex === 0;
+  const showFsHint = !isFs && !hintGone;
+  const bookW = size.pageW * 2;
+  const bookH = size.pageH;
 
   return (
     <div
       className="flip-stage"
       ref={stageRef}
-      onPointerDown={onPointerDown}
-      onPointerMove={onPointerMove}
-      onPointerUp={onPointerUp}
-      onPointerCancel={onPointerUp}
+      onPointerDown={onUserGesture}
+      onTouchStart={onUserGesture}
     >
-      <div className="spread spread--base">
-        {flipping && under ? paintSpread(under) : paintSpread(spread)}
-      </div>
-
-      {flipping && !spread.cover && (
-        <div className="spread spread--overlay" aria-hidden>
-          {drag?.dir === 'next' ? (
-            <>
-              {leaf(spread.left, 'left')}
-              <div
-                className="leaf leaf--flip leaf--right"
-                style={{ transform: `rotateY(${-flipAngle}deg)` }}
-              >
-                {spread.right !== null && (
-                  <img src={PAGE_FILES[spread.right]} alt="" draggable={false} />
-                )}
-                <div className="leaf__shade" style={{ opacity: progress * 0.5 }} />
-              </div>
-            </>
-          ) : (
-            <>
-              <div
-                className="leaf leaf--flip leaf--left"
-                style={{ transform: `rotateY(${flipAngle}deg)` }}
-              >
-                {spread.left !== null && (
-                  <img src={PAGE_FILES[spread.left]} alt="" draggable={false} />
-                )}
-                <div className="leaf__shade" style={{ opacity: progress * 0.5 }} />
-              </div>
-              {leaf(spread.right, 'right')}
-            </>
-          )}
-        </div>
-      )}
-
-      {flipping && spread.cover && drag?.dir === 'next' && (
-        <div className="spread spread--overlay" aria-hidden>
-          <div
-            className="leaf leaf--flip leaf--cover"
-            style={{ transform: `rotateY(${-flipAngle}deg)`, transformOrigin: 'left center' }}
+      <div className="flip-stage__book" ref={hostRef}>
+        {ready && (
+          <HTMLFlipBook
+            ref={bookRef as never}
+            key={`${size.pageW}x${size.pageH}`}
+            width={size.pageW}
+            height={size.pageH}
+            size="fixed"
+            minWidth={size.pageW}
+            maxWidth={size.pageW}
+            minHeight={size.pageH}
+            maxHeight={size.pageH}
+            autoSize={false}
+            showCover={true}
+            usePortrait={false}
+            drawShadow={true}
+            maxShadowOpacity={0.5}
+            flippingTime={1000}
+            useMouseEvents={true}
+            mobileScrollSupport={false}
+            swipeDistance={18}
+            className="hazel-flipbook"
+            style={{ width: `${bookW}px`, height: `${bookH}px` }}
+            onFlip={onFlip}
           >
-            <img src={PAGE_FILES[0]} alt="" draggable={false} />
-            <div className="leaf__shade" style={{ opacity: progress * 0.5 }} />
-          </div>
-        </div>
-      )}
+            {PAGE_FILES.map((src, i) => (
+              <Page
+                key={src}
+                src={src}
+                index={i}
+                kind={i === 0 ? 'cover' : 'page'}
+              />
+            ))}
+          </HTMLFlipBook>
+        )}
+      </div>
 
       <div className="build-stamp" aria-hidden>
-        v7
+        full screen
       </div>
+
+      {showFsHint && (
+        <div className="fs-hint">Tap for full screen</div>
+      )}
+
       {showChrome && (
         <div className="flip-stage__chrome">
           <span className="flip-stage__title">Hazel Ray Lights the Way</span>
           <span className="flip-stage__spread">{labelForPage(pageIndex)}</span>
-          <span className="flip-stage__hint">Swipe to turn · tap for full screen</span>
+          <span className="flip-stage__hint">Swipe to turn</span>
         </div>
       )}
     </div>
