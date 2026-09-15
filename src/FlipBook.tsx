@@ -3,7 +3,6 @@ import {
   useCallback,
   useEffect,
   useLayoutEffect,
-  
   useRef,
   useState,
 } from 'react';
@@ -34,17 +33,16 @@ const Page = forwardRef<
 
 type Size = { pageW: number; pageH: number };
 
+type PageFlipInstance = {
+  update: () => void;
+  flipNext: (corner?: string) => void;
+  flipPrev: (corner?: string) => void;
+  turnToPage: (page: number) => void;
+  getCurrentPageIndex: () => number;
+};
+
 type FlipApi = {
-  pageFlip: () => {
-    update: () => void;
-    getBoundsRect: () => {
-      left: number;
-      top: number;
-      width: number;
-      height: number;
-      pageWidth: number;
-    } | null;
-  };
+  pageFlip: () => PageFlipInstance;
 };
 
 async function requestFs(el: HTMLElement | null) {
@@ -68,13 +66,13 @@ export function FlipBook() {
   const stageRef = useRef<HTMLDivElement>(null);
   const hostRef = useRef<HTMLDivElement>(null);
   const bookRef = useRef<FlipApi>(null);
+  const coverStartX = useRef<number | null>(null);
   const [size, setSize] = useState<Size>({ pageW: 200, pageH: 300 });
   const [ready, setReady] = useState(false);
   const [pageIndex, setPageIndex] = useState(0);
   const [isFs, setIsFs] = useState(false);
   const [hintGone, setHintGone] = useState(false);
 
-  // Pin stage to visible viewport pixels
   useLayoutEffect(() => {
     const stage = stageRef.current;
     if (!stage) return;
@@ -103,7 +101,6 @@ export function FlipBook() {
     };
 
     sync();
-    // Try fullscreen as soon as landscape book mounts (may need later gesture)
     void requestFs(stage);
 
     window.addEventListener('resize', sync);
@@ -127,7 +124,6 @@ export function FlipBook() {
     return () => document.removeEventListener('fullscreenchange', onFs);
   }, []);
 
-  // Force page-flip resting pages to fill the host every frame (kills letterboxing)
   useEffect(() => {
     let raf = 0;
     const tick = () => {
@@ -175,6 +171,38 @@ export function FlipBook() {
     void requestFs(stageRef.current);
   };
 
+  const openInterior = useCallback(() => {
+    const flip = bookRef.current?.pageFlip?.();
+    if (!flip) return;
+    try {
+      flip.flipNext('top');
+    } catch {
+      try {
+        flip.turnToPage(1);
+        setPageIndex(1);
+        setHintGone(true);
+        playPageTurnSfx();
+      } catch {
+        /* ignore */
+      }
+    }
+  }, []);
+
+  const onCoverPointerDown = (e: React.PointerEvent) => {
+    onUserGesture();
+    coverStartX.current = e.clientX;
+    (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+  };
+
+  const onCoverPointerUp = (e: React.PointerEvent) => {
+    const start = coverStartX.current;
+    coverStartX.current = null;
+    if (start == null) return;
+    const dx = e.clientX - start;
+    if (dx < -40) openInterior();
+  };
+
+  const showCover = pageIndex === 0;
   const showChrome = pageIndex === 0;
   const showFsHint = !isFs && !hintGone;
   const bookW = size.pageW * 2;
@@ -187,7 +215,11 @@ export function FlipBook() {
       onPointerDown={onUserGesture}
       onTouchStart={onUserGesture}
     >
-      <div className="flip-stage__book" ref={hostRef}>
+      <div
+        className="flip-stage__book"
+        ref={hostRef}
+        style={{ visibility: showCover ? 'hidden' : 'visible' }}
+      >
         {ready && (
           <HTMLFlipBook
             ref={bookRef as never}
@@ -224,13 +256,24 @@ export function FlipBook() {
         )}
       </div>
 
+      {showCover && (
+        <div
+          className="cover-fullbleed"
+          onPointerDown={onCoverPointerDown}
+          onPointerUp={onCoverPointerUp}
+          onPointerCancel={() => {
+            coverStartX.current = null;
+          }}
+        >
+          <img src={PAGE_FILES[0]} alt="Hazel Ray Lights the Way — Cover" draggable={false} />
+        </div>
+      )}
+
       <div className="build-stamp" aria-hidden>
         full screen
       </div>
 
-      {showFsHint && (
-        <div className="fs-hint">Tap for full screen</div>
-      )}
+      {showFsHint && <div className="fs-hint">Tap for full screen</div>}
 
       {showChrome && (
         <div className="flip-stage__chrome">
