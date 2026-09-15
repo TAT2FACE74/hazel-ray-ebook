@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useRef, useState } from 'react';
+import { useCallback, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { PAGE_FILES } from './pages';
 import { playPageTurnSfx, unlockAudio } from './sfx';
 
@@ -11,13 +11,16 @@ function labelForPage(pageIndex: number): string {
   return `Pages ${left + 1}–${Math.min(right + 1, n)}`;
 }
 
-/** Normalize to the left page of a landscape spread (0 = cover). */
 function spreadLeft(pageIndex: number): number {
   if (pageIndex <= 0) return 0;
   return pageIndex % 2 === 1 ? pageIndex : pageIndex - 1;
 }
 
-function spreadPages(pageIndex: number): { left: number | null; right: number | null; cover: boolean } {
+function spreadPages(pageIndex: number): {
+  left: number | null;
+  right: number | null;
+  cover: boolean;
+} {
   const n = PAGE_FILES.length;
   if (pageIndex <= 0) return { left: null, right: null, cover: true };
   const left = spreadLeft(pageIndex);
@@ -46,12 +49,58 @@ type Drag = {
   dir: 'next' | 'prev' | null;
 };
 
+async function tryFullscreen(el: HTMLElement) {
+  try {
+    if (!document.fullscreenElement && el.requestFullscreen) {
+      await el.requestFullscreen();
+    }
+  } catch {
+    /* user gesture / policy — ignore */
+  }
+}
+
 export function FlipBook() {
   const stageRef = useRef<HTMLDivElement>(null);
   const dragRef = useRef<Drag | null>(null);
   const [pageIndex, setPageIndex] = useState(0);
   const [drag, setDrag] = useState<Drag | null>(null);
   const [animating, setAnimating] = useState(false);
+
+  // Pin stage to the visible viewport in CSS pixels (kills mobile letterboxing).
+  useLayoutEffect(() => {
+    const stage = stageRef.current;
+    if (!stage) return;
+
+    const sync = () => {
+      const vv = window.visualViewport;
+      const w = Math.max(1, Math.round(vv?.width ?? window.innerWidth));
+      const h = Math.max(1, Math.round(vv?.height ?? window.innerHeight));
+      const left = Math.round(vv?.offsetLeft ?? 0);
+      const top = Math.round(vv?.offsetTop ?? 0);
+      stage.style.position = 'fixed';
+      stage.style.left = `${left}px`;
+      stage.style.top = `${top}px`;
+      stage.style.width = `${w}px`;
+      stage.style.height = `${h}px`;
+      stage.style.right = 'auto';
+      stage.style.bottom = 'auto';
+      stage.style.margin = '0';
+      stage.style.inset = 'auto';
+    };
+
+    sync();
+    window.addEventListener('resize', sync);
+    window.addEventListener('orientationchange', sync);
+    const vv = window.visualViewport;
+    vv?.addEventListener('resize', sync);
+    vv?.addEventListener('scroll', sync);
+    return () => {
+      window.removeEventListener('resize', sync);
+      window.removeEventListener('orientationchange', sync);
+      vv?.removeEventListener('resize', sync);
+      vv?.removeEventListener('scroll', sync);
+    };
+  }, []);
 
   const n = PAGE_FILES.length;
   const spread = useMemo(() => spreadPages(pageIndex), [pageIndex]);
@@ -66,8 +115,9 @@ export function FlipBook() {
 
   const onPointerDown = (e: React.PointerEvent) => {
     unlockAudio();
-    if (animating) return;
     const stage = stageRef.current;
+    if (stage) void tryFullscreen(stage);
+    if (animating) return;
     if (!stage) return;
     stage.setPointerCapture(e.pointerId);
     const next: Drag = {
@@ -228,11 +278,14 @@ export function FlipBook() {
         </div>
       )}
 
+      <div className="build-stamp" aria-hidden>
+        v7
+      </div>
       {showChrome && (
         <div className="flip-stage__chrome">
           <span className="flip-stage__title">Hazel Ray Lights the Way</span>
           <span className="flip-stage__spread">{labelForPage(pageIndex)}</span>
-          <span className="flip-stage__hint">Swipe to turn</span>
+          <span className="flip-stage__hint">Swipe to turn · tap for full screen</span>
         </div>
       )}
     </div>
