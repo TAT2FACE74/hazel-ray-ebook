@@ -1,32 +1,6 @@
-import {
-  forwardRef,
-  useCallback,
-  useLayoutEffect,
-  useMemo,
-  useRef,
-  useState,
-} from 'react';
-import HTMLFlipBook from 'react-pageflip';
+import { useCallback, useMemo, useRef, useState } from 'react';
 import { PAGE_FILES } from './pages';
 import { playPageTurnSfx, unlockAudio } from './sfx';
-
-const Page = forwardRef<HTMLDivElement, { src: string; index: number }>(
-  function Page({ src, index }, ref) {
-    const hard = index === 0 || index === PAGE_FILES.length - 1;
-    return (
-      <div className="book-page" ref={ref} data-density={hard ? 'hard' : 'soft'}>
-        <img
-          src={src}
-          alt={`Page ${index + 1}`}
-          draggable={false}
-          loading={index < 4 ? 'eager' : 'lazy'}
-        />
-      </div>
-    );
-  },
-);
-
-type Size = { pageW: number; pageH: number; stageW: number; stageH: number };
 
 function labelForPage(pageIndex: number): string {
   const n = PAGE_FILES.length;
@@ -34,169 +8,230 @@ function labelForPage(pageIndex: number): string {
   if (pageIndex >= n - 1) return 'The End';
   const left = pageIndex % 2 === 1 ? pageIndex : pageIndex - 1;
   const right = left + 1;
-  if (right >= n - 1 && left >= n - 1) return 'The End';
   return `Pages ${left + 1}–${Math.min(right + 1, n)}`;
 }
 
-type FlipApi = {
-  pageFlip: () => {
-    update: () => void;
-    getBoundsRect: () => {
-      left: number;
-      top: number;
-      width: number;
-      height: number;
-      pageWidth: number;
-    };
-  };
+/** Normalize to the left page of a landscape spread (0 = cover). */
+function spreadLeft(pageIndex: number): number {
+  if (pageIndex <= 0) return 0;
+  return pageIndex % 2 === 1 ? pageIndex : pageIndex - 1;
+}
+
+function spreadPages(pageIndex: number): { left: number | null; right: number | null; cover: boolean } {
+  const n = PAGE_FILES.length;
+  if (pageIndex <= 0) return { left: null, right: null, cover: true };
+  const left = spreadLeft(pageIndex);
+  if (left >= n - 1) return { left: n - 1, right: null, cover: false };
+  return { left, right: left + 1 < n ? left + 1 : null, cover: false };
+}
+
+function nextIndex(pageIndex: number, n: number): number | null {
+  if (pageIndex >= n - 1) return null;
+  if (pageIndex <= 0) return 1;
+  const left = spreadLeft(pageIndex);
+  const nxt = left + 2;
+  return nxt >= n ? n - 1 : nxt;
+}
+
+function prevIndex(pageIndex: number): number | null {
+  if (pageIndex <= 0) return null;
+  if (pageIndex <= 1) return 0;
+  return spreadLeft(pageIndex) - 2;
+}
+
+type Drag = {
+  startX: number;
+  currentX: number;
+  width: number;
+  dir: 'next' | 'prev' | null;
 };
 
 export function FlipBook() {
   const stageRef = useRef<HTMLDivElement>(null);
-  const hostRef = useRef<HTMLDivElement>(null);
-  const bookRef = useRef<FlipApi>(null);
-  const [size, setSize] = useState<Size>({
-    pageW: 160,
-    pageH: 240,
-    stageW: 320,
-    stageH: 240,
-  });
+  const dragRef = useRef<Drag | null>(null);
   const [pageIndex, setPageIndex] = useState(0);
-  const [ready, setReady] = useState(false);
+  const [drag, setDrag] = useState<Drag | null>(null);
+  const [animating, setAnimating] = useState(false);
 
-  const fitToStage = useCallback(() => {
-    const host = hostRef.current;
-    const root = host?.querySelector('.hazel-flipbook') as HTMLElement | null;
-    const api = bookRef.current?.pageFlip?.();
-    if (!host || !root || !api) return;
-    try {
-      api.update();
-      const r = api.getBoundsRect();
-      if (!r?.width || !r?.height) return;
-      const hw = host.clientWidth;
-      const hh = host.clientHeight;
-      // Stretch the drawn book so its spread exactly fills the host (kills letterboxing).
-      const sx = hw / r.width;
-      const sy = hh / r.height;
-      root.style.transformOrigin = '0 0';
-      root.style.transform = `translate(${-r.left * sx}px, ${-r.top * sy}px) scale(${sx}, ${sy})`;
-    } catch {
-      // ignore until page-flip is ready
-    }
+  const n = PAGE_FILES.length;
+  const spread = useMemo(() => spreadPages(pageIndex), [pageIndex]);
+  const showChrome = pageIndex === 0;
+  const canNext = nextIndex(pageIndex, n) !== null;
+  const canPrev = prevIndex(pageIndex) !== null;
+
+  const goTo = useCallback((idx: number) => {
+    setPageIndex(idx);
+    playPageTurnSfx();
   }, []);
 
-  useLayoutEffect(() => {
+  const onPointerDown = (e: React.PointerEvent) => {
+    unlockAudio();
+    if (animating) return;
     const stage = stageRef.current;
     if (!stage) return;
+    stage.setPointerCapture(e.pointerId);
+    const next: Drag = {
+      startX: e.clientX,
+      currentX: e.clientX,
+      width: stage.clientWidth,
+      dir: null,
+    };
+    dragRef.current = next;
+    setDrag(next);
+  };
 
-    const measure = () => {
-      // Bind the stage to the *visible* viewport (not 100dvh under the URL bar).
-      const vv = window.visualViewport;
-      const stageW = Math.max(1, Math.round(vv?.width ?? window.innerWidth));
-      const stageH = Math.max(1, Math.round(vv?.height ?? window.innerHeight));
-      const left = Math.round(vv?.offsetLeft ?? 0);
-      const top = Math.round(vv?.offsetTop ?? 0);
+  const onPointerMove = (e: React.PointerEvent) => {
+    const prev = dragRef.current;
+    if (!prev) return;
+    const dx = e.clientX - prev.startX;
+    let dir = prev.dir;
+    if (!dir && Math.abs(dx) > 10) {
+      dir = dx < 0 ? 'next' : 'prev';
+      if (dir === 'next' && !canNext) dir = null;
+      if (dir === 'prev' && !canPrev) dir = null;
+    }
+    const next = { ...prev, currentX: e.clientX, dir };
+    dragRef.current = next;
+    setDrag(next);
+  };
 
-      stage.style.position = 'fixed';
-      stage.style.left = `${left}px`;
-      stage.style.top = `${top}px`;
-      stage.style.width = `${stageW}px`;
-      stage.style.height = `${stageH}px`;
-      stage.style.right = 'auto';
-      stage.style.bottom = 'auto';
+  const onPointerUp = (e: React.PointerEvent) => {
+    const stage = stageRef.current;
+    if (stage?.hasPointerCapture(e.pointerId)) {
+      stage.releasePointerCapture(e.pointerId);
+    }
+    const d = dragRef.current;
+    dragRef.current = null;
+    setDrag(null);
+    if (!d?.dir) return;
 
-      const pageW = Math.max(120, Math.floor(stageW / 2));
-      const pageH = Math.max(160, stageH);
-      setSize((prev) =>
-        prev.pageW === pageW &&
-        prev.pageH === pageH &&
-        prev.stageW === stageW &&
-        prev.stageH === stageH
-          ? prev
-          : { pageW, pageH, stageW, stageH },
+    const dx = e.clientX - d.startX;
+    const threshold = Math.min(72, d.width * 0.12);
+    setAnimating(true);
+    window.setTimeout(() => setAnimating(false), 280);
+
+    if (d.dir === 'next' && dx < -threshold) {
+      const nxt = nextIndex(pageIndex, n);
+      if (nxt !== null) goTo(nxt);
+    } else if (d.dir === 'prev' && dx > threshold) {
+      const prv = prevIndex(pageIndex);
+      if (prv !== null) goTo(prv);
+    }
+  };
+
+  let progress = 0;
+  if (drag?.dir) {
+    const dx = drag.currentX - drag.startX;
+    if (drag.dir === 'next') progress = Math.min(1, Math.max(0, -dx / (drag.width * 0.4)));
+    else progress = Math.min(1, Math.max(0, dx / (drag.width * 0.4)));
+  }
+  const flipAngle = progress * 160;
+  const flipping = drag?.dir != null && progress > 0.02;
+
+  const under = useMemo(() => {
+    if (!drag?.dir) return null;
+    if (drag.dir === 'next') {
+      const nxt = nextIndex(pageIndex, n);
+      return nxt === null ? null : spreadPages(nxt);
+    }
+    const prv = prevIndex(pageIndex);
+    return prv === null ? null : spreadPages(prv);
+  }, [drag?.dir, n, pageIndex]);
+
+  const leaf = (index: number | null, side: 'left' | 'right' | 'cover') => {
+    if (index === null && side !== 'cover') {
+      return <div className={`leaf leaf--empty leaf--${side}`} key={side} />;
+    }
+    if (side === 'cover') {
+      return (
+        <div className="leaf leaf--cover" key="cover">
+          <img src={PAGE_FILES[0]} alt="Cover" draggable={false} loading="eager" />
+        </div>
       );
-      setReady(true);
-      requestAnimationFrame(() => requestAnimationFrame(fitToStage));
-    };
+    }
+    return (
+      <div className={`leaf leaf--${side}`} key={`${side}-${index}`}>
+        <img
+          src={PAGE_FILES[index!]}
+          alt={`Page ${index! + 1}`}
+          draggable={false}
+          loading={index! < 4 ? 'eager' : 'lazy'}
+        />
+      </div>
+    );
+  };
 
-    measure();
-    const ro = new ResizeObserver(() => requestAnimationFrame(measure));
-    ro.observe(document.documentElement);
-    window.addEventListener('resize', measure);
-    window.addEventListener('orientationchange', measure);
-    const viewport = window.visualViewport;
-    viewport?.addEventListener('resize', measure);
-    viewport?.addEventListener('scroll', measure);
-    return () => {
-      ro.disconnect();
-      window.removeEventListener('resize', measure);
-      window.removeEventListener('orientationchange', measure);
-      viewport?.removeEventListener('resize', measure);
-      viewport?.removeEventListener('scroll', measure);
-    };
-  }, [fitToStage]);
-
-  const onFlip = useCallback(
-    (e: { data: number }) => {
-      setPageIndex(e.data);
-      playPageTurnSfx();
-      requestAnimationFrame(fitToStage);
-    },
-    [fitToStage],
-  );
-
-  const onInit = useCallback(() => {
-    requestAnimationFrame(() => requestAnimationFrame(fitToStage));
-  }, [fitToStage]);
-
-  const spreadLabel = useMemo(() => labelForPage(pageIndex), [pageIndex]);
-  const showChrome = pageIndex === 0;
-  const bookW = size.pageW * 2;
-  const bookH = size.pageH;
+  const paintSpread = (s: ReturnType<typeof spreadPages>) => {
+    if (s.cover) return leaf(0, 'cover');
+    return (
+      <>
+        {leaf(s.left, 'left')}
+        {leaf(s.right, 'right')}
+      </>
+    );
+  };
 
   return (
     <div
       className="flip-stage"
       ref={stageRef}
-      onPointerDown={unlockAudio}
-      onTouchStart={unlockAudio}
+      onPointerDown={onPointerDown}
+      onPointerMove={onPointerMove}
+      onPointerUp={onPointerUp}
+      onPointerCancel={onPointerUp}
     >
-      <div className="flip-stage__book" ref={hostRef}>
-        {ready && (
-          <HTMLFlipBook
-            ref={bookRef as never}
-            key={`${size.pageW}x${size.pageH}`}
-            width={size.pageW}
-            height={size.pageH}
-            size="fixed"
-            minWidth={size.pageW}
-            maxWidth={size.pageW}
-            minHeight={size.pageH}
-            maxHeight={size.pageH}
-            autoSize={false}
-            showCover={true}
-            usePortrait={false}
-            drawShadow={true}
-            maxShadowOpacity={0.3}
-            flippingTime={900}
-            useMouseEvents={true}
-            mobileScrollSupport={false}
-            swipeDistance={20}
-            className="hazel-flipbook"
-            style={{ width: `${bookW}px`, height: `${bookH}px` }}
-            onFlip={onFlip}
-            onInit={onInit}
-          >
-            {PAGE_FILES.map((src, i) => (
-              <Page key={src} src={src} index={i} />
-            ))}
-          </HTMLFlipBook>
-        )}
+      <div className="spread spread--base">
+        {flipping && under ? paintSpread(under) : paintSpread(spread)}
       </div>
+
+      {flipping && !spread.cover && (
+        <div className="spread spread--overlay" aria-hidden>
+          {drag?.dir === 'next' ? (
+            <>
+              {leaf(spread.left, 'left')}
+              <div
+                className="leaf leaf--flip leaf--right"
+                style={{ transform: `rotateY(${-flipAngle}deg)` }}
+              >
+                {spread.right !== null && (
+                  <img src={PAGE_FILES[spread.right]} alt="" draggable={false} />
+                )}
+                <div className="leaf__shade" style={{ opacity: progress * 0.5 }} />
+              </div>
+            </>
+          ) : (
+            <>
+              <div
+                className="leaf leaf--flip leaf--left"
+                style={{ transform: `rotateY(${flipAngle}deg)` }}
+              >
+                {spread.left !== null && (
+                  <img src={PAGE_FILES[spread.left]} alt="" draggable={false} />
+                )}
+                <div className="leaf__shade" style={{ opacity: progress * 0.5 }} />
+              </div>
+              {leaf(spread.right, 'right')}
+            </>
+          )}
+        </div>
+      )}
+
+      {flipping && spread.cover && drag?.dir === 'next' && (
+        <div className="spread spread--overlay" aria-hidden>
+          <div
+            className="leaf leaf--flip leaf--cover"
+            style={{ transform: `rotateY(${-flipAngle}deg)`, transformOrigin: 'left center' }}
+          >
+            <img src={PAGE_FILES[0]} alt="" draggable={false} />
+            <div className="leaf__shade" style={{ opacity: progress * 0.5 }} />
+          </div>
+        </div>
+      )}
+
       {showChrome && (
         <div className="flip-stage__chrome">
           <span className="flip-stage__title">Hazel Ray Lights the Way</span>
-          <span className="flip-stage__spread">{spreadLabel}</span>
+          <span className="flip-stage__spread">{labelForPage(pageIndex)}</span>
           <span className="flip-stage__hint">Swipe to turn</span>
         </div>
       )}
