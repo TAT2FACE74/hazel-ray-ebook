@@ -118,39 +118,49 @@ body,
 
 /* —— Landscape flip book —— */
 .flip-stage {
-  position: relative;
+  position: fixed;
+  inset: 0;
   width: 100%;
   height: 100%;
-  display: flex;
-  flex-direction: column;
-  align-items: stretch;
-  justify-content: flex-start;
-  background:
-    radial-gradient(ellipse at 50% 40%, #1a2f4d 0%, #0a1628 65%, #050b14 100%);
-  padding: env(safe-area-inset-top, 0) env(safe-area-inset-right, 0)
-    env(safe-area-inset-bottom, 0) env(safe-area-inset-left, 0);
+  height: 100dvh;
+  max-height: 100dvh;
+  background: #050b14;
+  padding: 0;
+  margin: 0;
+  overflow: hidden;
 }
 
 .flip-stage__book {
-  flex: 1;
-  display: block;
+  position: absolute;
+  inset: 0;
   width: 100%;
   height: 100%;
-  min-height: 0;
   padding: 0;
   margin: 0;
 }
 
-.hazel-flipbook {
+.hazel-flipbook,
+.hazel-flipbook.stf__parent {
+  position: absolute !important;
+  inset: 0 !important;
   width: 100% !important;
   height: 100% !important;
-  max-width: 100vw;
-  max-height: 100dvh;
-  box-shadow: none;
+  max-width: none !important;
+  max-height: none !important;
+  min-width: 0 !important;
+  min-height: 0 !important;
+  box-shadow: none !important;
+}
+
+.hazel-flipbook .stf__wrapper,
+.hazel-flipbook .stf__block {
+  width: 100% !important;
+  height: 100% !important;
+  padding-bottom: 0 !important;
 }
 
 .book-page {
-  background: var(--cream);
+  background: #050b14;
   overflow: hidden;
   width: 100%;
   height: 100%;
@@ -161,6 +171,7 @@ body,
   width: 100%;
   height: 100%;
   object-fit: cover;
+  object-position: center;
   pointer-events: none;
   -webkit-user-drag: none;
 }
@@ -177,13 +188,13 @@ body,
   align-items: baseline;
   justify-content: center;
   width: 100%;
-  padding: 0.2rem 0.5rem max(0.25rem, env(safe-area-inset-bottom, 0));
+  padding: 0.35rem 0.5rem max(0.35rem, env(safe-area-inset-bottom, 0));
   color: var(--gold-soft);
-  font-size: 0.65rem;
-  opacity: 0.85;
+  font-size: 0.7rem;
+  opacity: 0.9;
   pointer-events: none;
   text-shadow: 0 1px 4px rgba(0, 0, 0, 0.85);
-  background: linear-gradient(to top, rgba(5, 11, 20, 0.55), transparent);
+  background: linear-gradient(to top, rgba(5, 11, 20, 0.65), transparent);
 }
 
 .flip-stage__title {
