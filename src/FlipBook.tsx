@@ -26,7 +26,7 @@ const Page = forwardRef<HTMLDivElement, { src: string; index: number }>(
   },
 );
 
-type Size = { width: number; height: number };
+type Size = { pageW: number; pageH: number };
 
 function labelForPage(pageIndex: number): string {
   const n = PAGE_FILES.length;
@@ -40,43 +40,43 @@ function labelForPage(pageIndex: number): string {
 
 export function FlipBook() {
   const hostRef = useRef<HTMLDivElement>(null);
-  const [size, setSize] = useState<Size>({ width: 160, height: 240 });
+  const [size, setSize] = useState<Size>({ pageW: 160, pageH: 240 });
   const [pageIndex, setPageIndex] = useState(0);
+  const [ready, setReady] = useState(false);
 
   useLayoutEffect(() => {
     const host = hostRef.current;
     if (!host) return;
 
     const measure = () => {
+      // Use ONLY the host box — same element page-flip reads as its block parent.
+      // Mixing visualViewport with 100dvh caused top/bottom letterboxing.
       const rect = host.getBoundingClientRect();
-      // Prefer visualViewport when present (mobile browser chrome)
-      const vv = window.visualViewport;
-      const vw = vv?.width ?? window.innerWidth;
-      const vh = vv?.height ?? window.innerHeight;
-      const w = Math.max(rect.width || vw, 1);
-      const h = Math.max(rect.height || vh, 1);
-      // One leaf = half screen wide, full screen tall → book fills the phone
-      const width = Math.max(120, Math.floor(w / 2));
-      const height = Math.max(160, Math.floor(h));
+      const w = Math.max(1, Math.floor(rect.width));
+      const h = Math.max(1, Math.floor(rect.height));
+      // Odd total width: give the extra pixel to the right by flooring half.
+      const pageW = Math.max(120, Math.floor(w / 2));
+      const pageH = Math.max(160, h);
       setSize((prev) =>
-        prev.width === width && prev.height === height ? prev : { width, height },
+        prev.pageW === pageW && prev.pageH === pageH
+          ? prev
+          : { pageW, pageH },
       );
+      setReady(true);
     };
 
     measure();
-    const ro = new ResizeObserver(measure);
+    const ro = new ResizeObserver(() => {
+      // rAF so layout (address bar show/hide) settles before we read
+      requestAnimationFrame(measure);
+    });
     ro.observe(host);
     window.addEventListener('resize', measure);
     window.addEventListener('orientationchange', measure);
-    const viewport = window.visualViewport;
-    viewport?.addEventListener('resize', measure);
-    viewport?.addEventListener('scroll', measure);
     return () => {
       ro.disconnect();
       window.removeEventListener('resize', measure);
       window.removeEventListener('orientationchange', measure);
-      viewport?.removeEventListener('resize', measure);
-      viewport?.removeEventListener('scroll', measure);
     };
   }, []);
 
@@ -87,6 +87,8 @@ export function FlipBook() {
 
   const spreadLabel = useMemo(() => labelForPage(pageIndex), [pageIndex]);
   const showChrome = pageIndex === 0;
+  const bookW = size.pageW * 2;
+  const bookH = size.pageH;
 
   return (
     <div
@@ -95,32 +97,37 @@ export function FlipBook() {
       onTouchStart={unlockAudio}
     >
       <div className="flip-stage__book" ref={hostRef}>
-        <HTMLFlipBook
-          key={`${size.width}x${size.height}`}
-          width={size.width}
-          height={size.height}
-          size="stretch"
-          minWidth={size.width}
-          maxWidth={size.width}
-          minHeight={size.height}
-          maxHeight={size.height}
-          autoSize={false}
-          showCover={true}
-          usePortrait={false}
-          drawShadow={true}
-          maxShadowOpacity={0.45}
-          flippingTime={900}
-          useMouseEvents={true}
-          mobileScrollSupport={false}
-          swipeDistance={20}
-          className="hazel-flipbook"
-          style={{ width: '100%', height: '100%' }}
-          onFlip={onFlip}
-        >
-          {PAGE_FILES.map((src, i) => (
-            <Page key={src} src={src} index={i} />
-          ))}
-        </HTMLFlipBook>
+        {ready && (
+          <HTMLFlipBook
+            key={`${size.pageW}x${size.pageH}`}
+            width={size.pageW}
+            height={size.pageH}
+            size="fixed"
+            minWidth={size.pageW}
+            maxWidth={size.pageW}
+            minHeight={size.pageH}
+            maxHeight={size.pageH}
+            autoSize={false}
+            showCover={true}
+            usePortrait={false}
+            drawShadow={true}
+            maxShadowOpacity={0.35}
+            flippingTime={900}
+            useMouseEvents={true}
+            mobileScrollSupport={false}
+            swipeDistance={20}
+            className="hazel-flipbook"
+            style={{
+              width: `${bookW}px`,
+              height: `${bookH}px`,
+            }}
+            onFlip={onFlip}
+          >
+            {PAGE_FILES.map((src, i) => (
+              <Page key={src} src={src} index={i} />
+            ))}
+          </HTMLFlipBook>
+        )}
       </div>
       {showChrome && (
         <div className="flip-stage__chrome">
