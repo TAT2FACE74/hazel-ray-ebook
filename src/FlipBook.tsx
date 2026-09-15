@@ -1,6 +1,6 @@
 import { forwardRef, useCallback, useLayoutEffect, useMemo, useState } from 'react';
 import HTMLFlipBook from 'react-pageflip';
-import { PAGE_ASPECT, PAGE_FILES } from './pages';
+import { PAGE_FILES } from './pages';
 import { playPageTurnSfx, unlockAudio } from './sfx';
 
 const Page = forwardRef<HTMLDivElement, { src: string; index: number }>(
@@ -20,20 +20,13 @@ const Page = forwardRef<HTMLDivElement, { src: string; index: number }>(
 );
 
 function computePageSize() {
+  // Fill the phone: each leaf is half the screen wide and full height.
+  // Stretch pages to the viewport (do not letterbox to PDF aspect).
   const vw = window.innerWidth;
   const vh = window.innerHeight;
-  // Minimal padding so the two-page spread fills nearly the full viewport
-  const padX = 6;
-  const padY = 10;
-  const maxH = Math.max(120, vh - padY);
-  const maxW = Math.max(80, (vw - padX) / 2);
-  let height = maxH;
-  let width = height * PAGE_ASPECT;
-  if (width > maxW) {
-    width = maxW;
-    height = width / PAGE_ASPECT;
-  }
-  return { width: Math.floor(width), height: Math.floor(height) };
+  const width = Math.max(120, Math.floor(vw / 2));
+  const height = Math.max(160, Math.floor(vh));
+  return { width, height };
 }
 
 function labelForPage(pageIndex: number): string {
@@ -80,10 +73,10 @@ export function FlipBook() {
           key={`${size.width}x${size.height}`}
           width={size.width}
           height={size.height}
-          size="stretch"
-          minWidth={Math.max(100, Math.floor(size.width * 0.45))}
+          size="fixed"
+          minWidth={size.width}
           maxWidth={size.width}
-          minHeight={Math.max(140, Math.floor(size.height * 0.45))}
+          minHeight={size.height}
           maxHeight={size.height}
           showCover={true}
           usePortrait={false}
